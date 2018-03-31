@@ -26,22 +26,47 @@ GetNetworkData <- function(scope = c("CVE-2016-8475", "CVE-2014-8613", "CVE-2008
 
   # CVEs --> CWEs
   c.cwes <- sapply(netsec.data$datasets$cves$problem.type, function(x) length(jsonlite::fromJSON(x)))
+
+  # No edges
+  cves2cwes0 <- netsec.data$datasets$cves[c.cwes == 0, c("cve.id", "problem.type", "cvss2.score", "cvss3.score")]
+  cves2cwes0$cvss2.score[is.na(cves2cwes0$cvss2.score)] <- 0
+  cves2cwes0$cvss3.score[is.na(cves2cwes0$cvss3.score)] <- 0
+  cves2cwes0 <- dplyr::mutate(cves2cwes0, risk = pmax(cvss2.score, cvss3.score))
+  cves2cwes0$cvss2.score <- NULL
+  cves2cwes0$cvss3.score <- NULL
+  cves2cwes0$problem.type <- rep("NVD-CWE-noinfo", nrow(cves2cwes0))
+
   # One edge
-  cves2cwes1 <- netsec.data$datasets$cves[c.cwes == 1, c("cve.id", "problem.type")]
+  cves2cwes1 <- netsec.data$datasets$cves[c.cwes == 1, c("cve.id", "problem.type", "cvss2.score", "cvss3.score")]
   cves2cwes1$problem.type <- sapply(cves2cwes1$problem.type, function(x) jsonlite::fromJSON(x))
-  names(cves2cwes1) <- c("src", "target")
+  names(cves2cwes1) <- c("src", "target", "risc2", "risc3")
+  cves2cwes1$risc2[is.na(cves2cwes1$risc2)] <- 0
+  cves2cwes1$risc3[is.na(cves2cwes1$risc3)] <- 0
+  cves2cwes1 <- dplyr::mutate(cves2cwes1, risk = pmax(risc2, risc3))
+  cves2cwes1$risc2 <- NULL
+  cves2cwes1$risc3 <- NULL
 
   # Multiple edges
-  cves2cwesN <- netsec.data$datasets$cves[c.cwes > 1, c("cve.id", "problem.type")]
+  cves2cwesN <- netsec.data$datasets$cves[c.cwes > 1, c("cve.id", "problem.type", "cvss2.score", "cvss3.score")]
+  cves2cwesN$cvss2.score[is.na(cves2cwesN$cvss2.score)] <- 0
+  cves2cwesN$cvss3.score[is.na(cves2cwesN$cvss3.score)] <- 0
+  cves2cwesN <- dplyr::mutate(cves2cwesN, risk = pmax(cvss2.score, cvss3.score))
+  cves2cwesN$cvss2.score <- NULL
+  cves2cwesN$cvss3.score <- NULL
   cves2cwesN <- apply(cves2cwesN, 1,
                       function(x) {
                         pt <- jsonlite::fromJSON(x[["problem.type"]])
                         cve <- rep(x[["cve.id"]], length(pt))
-                        data.frame(src = cve, target = pt, stringsAsFactors = F)
+                        data.frame(src = cve, target = pt, risk = as.numeric(x[["risk"]]),
+                                   stringsAsFactors = F)
                       })
   cves2cwesN <- data.table::rbindlist(cves2cwesN)
   # Join edges
-  cves2cwes <- dplyr::bind_rows(cves2cwes1, cves2cwesN)
+  cves2cwes <- dplyr::bind_rows(cves2cwes0, cves2cwes1, cves2cwesN)
+
+  # CWEs --> CWEs (father)
+
+  # CWEs group by View --> clusters
 
   # CWEs --> CAPECs
   netsec.data$datasets$cwes$Related_Attack_Patterns[is.na(netsec.data$datasets$cwes$Related_Attack_Patterns)] <- "{}"
@@ -75,6 +100,19 @@ GetNetworkData <- function(scope = c("CVE-2016-8475", "CVE-2014-8613", "CVE-2008
   scope.cwe <- data.frame(src = scope[which(!(scope %in% cwes2capec$src))],
                           target = "NVD-CWE-noinfo", stringsAsFactors = F)
   cwes2capec <- dplyr::bind_rows(scope.cwe.capec, scope.cwe)
+
+  # CVEs --> CPEs
+  # cves <- netsec.data$datasets$cves
+  # cves2cpes <- cves[, c("cve.id", "vulnerable.configuration")]
+  # for (i in 1:nrow(cves2cpes)) {
+  #   vcpes <- jsonlite::fromJSON(cves2cpes$vulnerable.configuration[i])
+  #   if (vcpes$operator == "OR") {
+  #     vcpes <- vcpes$cpe[[1]]
+  #     vcpes <- vcpes[vcpes$vulnerable, "cpe23Uri"]
+  #   }
+  #   cves2cpes$vulnerable.configuration[i] <- vcpes
+  # }
+
 
 
   # Join all graphs
