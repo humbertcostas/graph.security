@@ -124,7 +124,7 @@ GetNetworkData <- function(scope = c("CVE-2016-8475", "CVE-2014-8613", "CVE-2008
   cwes2capec <- GetRelationCWE2CAPEC()
 
   # CWEs hierarcy
-  cwes.hr <- GetCWEHierarcy(netsec.data$datasets$cwes, as_numbers = T)
+  cwes.hr <- GetCWEHierarcy()
 
   # View 1008:Architectural Concepts
   # View 928:Weaknesses in OWASP Top Ten 2013
@@ -222,10 +222,10 @@ GetNetworkData <- function(scope = c("CVE-2016-8475", "CVE-2014-8613", "CVE-2008
 #' @export
 #'
 #' @examples
-GetCWEHierarcy <- function(cwes, as_numbers = T) {
-  cwes.weaknesses <- cwes[cwes$CWE_Type == "Weakness", ]
-  cwes.categories <- cwes[cwes$CWE_Type == "Category", ]
-  cwes.views <- cwes[cwes$CWE_Type == "View", ]
+GetCWEHierarcy <- function(as_numbers = T) {
+  cwes.weaknesses <- netsec.data$datasets$cwes[netsec.data$datasets$cwes$CWE_Type == "Weakness", ]
+  cwes.categories <- netsec.data$datasets$cwes[netsec.data$datasets$cwes$CWE_Type == "Category", ]
+  cwes.views <- netsec.data$datasets$cwes[netsec.data$datasets$cwes$CWE_Type == "View", ]
 
   # Experimental relationship weight
 
@@ -238,8 +238,8 @@ GetCWEHierarcy <- function(cwes, as_numbers = T) {
           "Requires" = 7,
           "CanAlsoBe" = 5,
           "PeerOf" = 1,
-          "Has_Member" = 5,
-          "Member_Of" = 5)
+          "has_member" = 5,
+          "member_of" = 5)
 
   # Views hierarchy
   vh <- cwes.views[, c("ID", "Related_Weakness")]
@@ -247,17 +247,36 @@ GetCWEHierarcy <- function(cwes, as_numbers = T) {
   vh <- apply(vh, 1,
                function(x) {
                  y <- RJSONIO::fromJSON(x[2])
-                 data.table::rbindlist(lapply(y,
-                                              function(z)
-                                                data.frame(src = z[["cwe_id"]],
-                                                           target = x[1],
-                                                           nature = "Has_Member",
-                                                           weight = rw["Has_Member"],
-                                                           stringsAsFactors = F)
-                 ))
+                 if (length(y) > 0) {
+                   y <- cbind(as.data.frame(t(as.matrix(as.data.frame(y))), stringsAsFactors = F),
+                              data.frame(nature = row.names(as.matrix(y)), stringsAsFactors = F))
+                   y$cwe_id <- as.character(y$cwe_id)
+                   y$view_id <- as.character(y$view_id)
+                   data.table::rbindlist(apply(y, 1,
+                                               function(z){
+                                                 if (z["nature"] == "has_member") {
+                                                   src <- z["cwe_id"]
+                                                   target <- x[1]
+                                                 } else {
+                                                   src <- x[1]
+                                                   target <- z["cwe_id"]
+                                                 }
+                                                 nature <- z["nature"]
+                                                 data.frame(src = src,
+                                                            target = target,
+                                                            nature = nature,
+                                                            weight = rw[nature],
+                                                            stringsAsFactors = F)
+                                               }
+                   ))
+                 } else {
+                   data.frame(src = x[1], target = NA,
+                              nature = NA, weight = 0, stringsAsFactors = F)
+                 }
                }
   )
   vh <- unique(data.table::rbindlist(vh))
+  vh$type <- rep("view", nrow(vh))
 
   # Categories hierarchy
   ch <- cwes.categories[, c("ID", "Related_Weakness")]
@@ -265,17 +284,36 @@ GetCWEHierarcy <- function(cwes, as_numbers = T) {
   ch <- apply(ch, 1,
                function(x) {
                  y <- RJSONIO::fromJSON(x[2])
-                 data.table::rbindlist(lapply(y,
-                                              function(z)
-                                                data.frame(src = z[["cwe_id"]],
-                                                           target = x[1],
-                                                           nature = "Has_Member",
-                                                           weight = rw["Has_Member"],
-                                                           stringsAsFactors = F)
-                 ))
+                 if (length(y) > 0) {
+                   y <- cbind(as.data.frame(t(as.matrix(as.data.frame(y))), stringsAsFactors = F),
+                              data.frame(nature = row.names(as.matrix(y)), stringsAsFactors = F))
+                   y$cwe_id <- as.character(y$cwe_id)
+                   y$view_id <- as.character(y$view_id)
+                   data.table::rbindlist(apply(y, 1,
+                                               function(z){
+                                                 if (z["nature"] == "has_member") {
+                                                   src <- z["cwe_id"]
+                                                   target <- x[1]
+                                                 } else {
+                                                   src <- x[1]
+                                                   target <- z["cwe_id"]
+                                                 }
+                                                 nature <- z["nature"]
+                                                 data.frame(src = src,
+                                                            target = target,
+                                                            nature = nature,
+                                                            weight = rw[nature],
+                                                            stringsAsFactors = F)
+                                               }
+                   ))
+                 } else {
+                   data.frame(src = x[1], target = NA,
+                              nature = NA, weight = 0, stringsAsFactors = F)
+                 }
                }
   )
   ch <- unique(data.table::rbindlist(ch))
+  ch$type <- rep("category", nrow(ch))
 
   # Weakness hierarchy
   wh <- cwes.weaknesses[, c("ID", "Related_Weakness")]
@@ -296,6 +334,7 @@ GetCWEHierarcy <- function(cwes, as_numbers = T) {
               }
   )
   wh <- unique(data.table::rbindlist(wh))
+  wh$type <- rep("weakness", nrow(wh))
 
   cwes2cwes <- dplyr::bind_rows(vh, ch, wh)
   if (as_numbers) {
