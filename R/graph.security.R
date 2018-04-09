@@ -29,7 +29,7 @@ GetRelationCVE2CWE <- function() {
   names(cves2cwes0) <- c("src", "target", "cvss2.score", "cvss3.score")
   cves2cwes0$cvss2.score[is.na(cves2cwes0$cvss2.score)] <- 0
   cves2cwes0$cvss3.score[is.na(cves2cwes0$cvss3.score)] <- 0
-  cves2cwes0 <- dplyr::mutate(cves2cwes0, risk = pmax(cvss2.score, cvss3.score))
+  cves2cwes0 <- dplyr::mutate(cves2cwes0, weight = pmax(cvss2.score, cvss3.score))
   cves2cwes0$cvss2.score <- NULL
   cves2cwes0$cvss3.score <- NULL
   cves2cwes0$target <- rep("NVD-CWE-noinfo", nrow(cves2cwes0))
@@ -40,7 +40,7 @@ GetRelationCVE2CWE <- function() {
   names(cves2cwes1) <- c("src", "target", "risc2", "risc3")
   cves2cwes1$risc2[is.na(cves2cwes1$risc2)] <- 0
   cves2cwes1$risc3[is.na(cves2cwes1$risc3)] <- 0
-  cves2cwes1 <- dplyr::mutate(cves2cwes1, risk = pmax(risc2, risc3))
+  cves2cwes1 <- dplyr::mutate(cves2cwes1, weight = pmax(risc2, risc3))
   cves2cwes1$risc2 <- NULL
   cves2cwes1$risc3 <- NULL
 
@@ -55,7 +55,7 @@ GetRelationCVE2CWE <- function() {
                       function(x) {
                         pt <- jsonlite::fromJSON(x[["problem.type"]])
                         cve <- rep(x[["cve.id"]], length(pt))
-                        data.frame(src = cve, target = pt, risk = as.numeric(x[["risk"]]),
+                        data.frame(src = cve, target = pt, weight = as.numeric(x[["risk"]]),
                                    stringsAsFactors = F)
                       })
   cves2cwesN <- data.table::rbindlist(cves2cwesN)
@@ -124,50 +124,75 @@ GetNetworkData <- function(scope = c("CVE-2016-8475", "CVE-2014-8613", "CVE-2008
   cwes2capec <- GetRelationCWE2CAPEC()
 
   # CWEs hierarcy
-  cwes.hr <- GetCWEHierarcy()
-
-  # XXXXXXXXXXXXXXXXXXXX
-  # Apply scope to some view following shortest path
-  # XXXXXXXXXXXXXXXXXXXX
+  cwes.hr <- GetCWEHierarcy(as_numbers = F)
 
   # View 1008:Architectural Concepts
+  arch.concepts <- cwes.hr %>% filter(type == "view") %>% filter(target == "CWE-1008") %>% select(src, target)
+  arch.concepts <- unique(c(arch.concepts$src, arch.concepts$target))
   # View 928:Weaknesses in OWASP Top Ten 2013
-  # View 919:Weaknesses in Mobile Applications
-  v2d <- (dplyr::select(dplyr::filter(dplyr::filter(cwes,
-                                                    CWE_Type == "View"),
-                                      ID != "1008"),
-                        ID))[["ID"]]
-  v2v <- (dplyr::select(dplyr::filter(dplyr::filter(cwes,
-                                                    CWE_Type == "View"),
-                                      ID == "1008"),
-                        ID))[["ID"]]
-  c2v <- (dplyr::select(dplyr::filter(dplyr::filter(cwes,
-                                                    CWE_Type == "Category"),
-                                      ID == "1008"),
-                        ID))[["ID"]]
-  cwes.hr$target %in% v2d
+  owasp13 <- cwes.hr %>% filter(type == "view") %>% filter(target == "CWE-928") %>% select(src, target)
+  owasp13 <- unique(c(owasp13$src, owasp13$target))
 
   # CWEs --> CWEs (father)
 
   # CWEs group by View --> clusters
 
   # Filter scope
-  scope.cve.cwe <- dplyr::filter(cves2cwes, src %in% scope)
   if (any(scope %in% cves2cwes$src)) {
-    scope.cves2cwes <- scope.cve.cwe
+    scope.cves2cwes <- dplyr::filter(cves2cwes, src %in% scope)
   } else {
     scope.cve <- data.frame(src = scope[which(!(scope %in% cves2cwes$src))],
                             target = "NVD-CWE-noinfo", stringsAsFactors = F)
-    scope.cves2cwes <- dplyr::bind_rows(scope.cve.cwe, scope.cve)
+    scope.cves2cwes <- dplyr::bind_rows(dplyr::filter(cves2cwes, src %in% scope), scope.cve)
   }
+  scope.cves2cwes$nature <- rep("ChildOf", nrow(scope.cves2cwes))
+  scope.cves2cwes$type <- rep("vuln", nrow(scope.cves2cwes))
+
+  # Add relations between CWEs in scope
+  # This problem is NP-hard
+  # Ref: https://stackoverflow.com/questions/46001663/get-subgraph-of-shortest-path-between-n-nodes
+  # Ref: https://stackoverflow.com/questions/7685291/construct-a-minimum-spanning-tree-covering-a-specific-subset-of-the-vertices
+  scope.cwes <- unique(grep(pattern = "CWE-\\d+",
+                            x = scope.cves2cwes$target, value = T))
+
+  # Anyway, let's try to connect with CWE architecture concepts view
+  edges.btw <- dplyr::filter(dplyr::filter(cwes.hr, src %in% scope.cwes), target %in% scope.cwes)
+  edges.arch <- dplyr::filter(dplyr::filter(cwes.hr, src %in% scope.cwes), target %in% arch.concepts)
+  scope.cwes.edges <- dplyr::bind_rows(edges.arch, edges.btw)
+
+  # scope.cwes.nodes <- unique(c(scope.cves2cwes$src, scope.cwes.edges$src, scope.cwes.edges$target))
+
+  scope.cwe.arch <- dplyr::filter(cwes.hr, cwes.hr$src %in% edges.arch$target)
+
+  # Build final graph components
+  scope.edges <- dplyr::bind_rows(scope.cves2cwes, scope.cwes.edges, scope.cwe.arch)
+  scope.nodes <- data.frame(node = unique(c(scope.edges$src, scope.edges$target)), stringsAsFactors = F)
+
+  # Check graph
+  # networkD3::simpleNetwork(scope.edges)
+
+  # Ref: https://www.r-bloggers.com/network-visualization-part-6-d3-and-r-networkd3/
+  # scope.nodes <- dplyr::left_join(x = scope.nodes, y = dplyr::select(netsec.data$datasets$cves, cve.id, title), by = c("node" = "cve.id"))
+  node.colors <- tolower(RColorBrewer::brewer.pal(3, "Set2"))
+  scope.nodes$node.color <- rep(node.colors[1], nrow(scope.nodes))
+  scope.nodes$node.color[grepl(pattern = "CVE-\\d+", x = scope.nodes$node)] <- node.colors[2]
+  scope.edges.color <- data.frame(nature = unique(scope.edges$nature),
+                                  edge.color = tolower(RColorBrewer::brewer.pal(length(unique(scope.edges$nature)), "Set3")),
+                                  stringsAsFactors = F)
+  scope.edges <- dplyr::left_join(scope.edges, scope.edges.color, by = c("nature"))
+
+  networkD3::simpleNetwork(Data = scope.edges, Source = "src", Target = "target", linkColour = "edge.color")
+
+  # g.scope.cwes <- igraph::from_data_frame()
 
 
-  scope <- unique(cwes2capec$target)
-  scope.cwe.capec <- dplyr::filter(cwes2capec, src %in% scope)
-  scope.cwe <- data.frame(src = scope[which(!(scope %in% cwes2capec$src))],
-                          target = "NVD-CWE-noinfo", stringsAsFactors = F)
-  cwes2capec <- dplyr::bind_rows(scope.cwe.capec, scope.cwe)
 
+  # scope <- unique(cwes2capec$target)
+  # scope.cwe.capec <- dplyr::filter(cwes2capec, src %in% scope)
+  # scope.cwe <- data.frame(src = scope[which(!(scope %in% cwes2capec$src))],
+  #                         target = "NVD-CWE-noinfo", stringsAsFactors = F)
+  # cwes2capec <- dplyr::bind_rows(scope.cwe.capec, scope.cwe)
+  #
   # CVEs --> CPEs
   # cves <- netsec.data$datasets$cves
   # cves2cpes <- cves[, c("cve.id", "vulnerable.configuration")]
@@ -183,8 +208,8 @@ GetNetworkData <- function(scope = c("CVE-2016-8475", "CVE-2014-8613", "CVE-2008
 
 
   # Join all graphs
-  gsec <- dplyr::bind_rows(cves2cwes, cwes2capec)
-  return(cves2cwes)
+  # gsec <- dplyr::bind_rows(cves2cwes, cwes2capec)
+  return(scope.edges)
 }
 
 #' Given a net.security CWES data.frame it returns a data.frame prepared for
@@ -327,6 +352,9 @@ GetCWEHierarcy <- function(as_numbers = T) {
                 y <- RJSONIO::fromJSON(x[2])
                 data.table::rbindlist(lapply(y,
                                              function(z) {
+                                               # XXXXXXXXXXXXXXXX
+                                               # ?Set directions based on nature?
+                                               # XXXXXXXXXXXXXXXX
                                                data.frame(src = x[1],
                                                           target = z[["cwe_id"]],
                                                           nature = z[["nature"]],
