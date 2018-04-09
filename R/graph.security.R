@@ -126,6 +126,10 @@ GetNetworkData <- function(scope = c("CVE-2016-8475", "CVE-2014-8613", "CVE-2008
   # CWEs hierarcy
   cwes.hr <- GetCWEHierarcy()
 
+  # XXXXXXXXXXXXXXXXXXXX
+  # Apply scope to some view following shortest path
+  # XXXXXXXXXXXXXXXXXXXX
+
   # View 1008:Architectural Concepts
   # View 928:Weaknesses in OWASP Top Ten 2013
   # View 919:Weaknesses in Mobile Applications
