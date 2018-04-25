@@ -133,10 +133,6 @@ GetNetworkData <- function(scope = c("CVE-2016-8475", "CVE-2014-8613", "CVE-2008
   owasp13 <- cwes.hr %>% filter(type == "view") %>% filter(target == "CWE-928") %>% select(src, target)
   owasp13 <- unique(c(owasp13$src, owasp13$target))
 
-  # CWEs --> CWEs (father)
-
-  # CWEs group by View --> clusters
-
   # Filter scope
   if (any(scope %in% cves2cwes$src)) {
     scope.cves2cwes <- dplyr::filter(cves2cwes, src %in% scope)
@@ -152,6 +148,8 @@ GetNetworkData <- function(scope = c("CVE-2016-8475", "CVE-2014-8613", "CVE-2008
   # This problem is NP-hard
   # Ref: https://stackoverflow.com/questions/46001663/get-subgraph-of-shortest-path-between-n-nodes
   # Ref: https://stackoverflow.com/questions/7685291/construct-a-minimum-spanning-tree-covering-a-specific-subset-of-the-vertices
+  #
+  # Maybe this: https://softwareengineering.stackexchange.com/questions/254255/how-can-i-find-the-shortest-path-between-two-subgraphs-of-a-larger-graph
   scope.cwes <- unique(grep(pattern = "CWE-\\d+",
                             x = scope.cves2cwes$target, value = T))
 
@@ -159,10 +157,18 @@ GetNetworkData <- function(scope = c("CVE-2016-8475", "CVE-2014-8613", "CVE-2008
   edges.btw <- dplyr::filter(dplyr::filter(cwes.hr, src %in% scope.cwes), target %in% scope.cwes)
   edges.arch <- dplyr::filter(dplyr::filter(cwes.hr, src %in% scope.cwes), target %in% arch.concepts)
   scope.cwes.edges <- dplyr::bind_rows(edges.arch, edges.btw)
+  scope.cwes.edges$nature <- as.character.factor(scope.cwes.edges$nature)
+  scope.cwes.edges$weight <- as.numeric(scope.cwes.edges$weight)
+
+  # Select nodes isolated
+  # edges.alone <- dplyr::filter(dplyr::filter(dplyr::filter(cwes.hr, src %in% scope.cwes), !(target %in% scope.cwes)), !(target %in% arch.concepts))
+  # edges.alone <- dplyr::filter(edges.alone, (target %in% arch.concepts) || (target %in% scope.cwes))
 
   # scope.cwes.nodes <- unique(c(scope.cves2cwes$src, scope.cwes.edges$src, scope.cwes.edges$target))
 
   scope.cwe.arch <- dplyr::filter(cwes.hr, cwes.hr$src %in% edges.arch$target)
+  scope.cwe.arch$nature <- as.character.factor(scope.cwe.arch$nature)
+  scope.cwe.arch$weight <- as.numeric(scope.cwe.arch$weight)
 
   # Build final graph components
   scope.edges <- dplyr::bind_rows(scope.cves2cwes, scope.cwes.edges, scope.cwe.arch)
@@ -181,6 +187,7 @@ GetNetworkData <- function(scope = c("CVE-2016-8475", "CVE-2014-8613", "CVE-2008
                                   stringsAsFactors = F)
   scope.edges <- dplyr::left_join(scope.edges, scope.edges.color, by = c("nature"))
 
+  networkD3::simpleNetwork(Data = scope.edges, Source = "src", Target = "target")
   networkD3::simpleNetwork(Data = scope.edges, Source = "src", Target = "target", linkColour = "edge.color")
 
   # g.scope.cwes <- igraph::from_data_frame()
@@ -257,18 +264,12 @@ GetCWEHierarcy <- function(as_numbers = T) {
   cwes.views <- netsec.data$datasets$cwes[netsec.data$datasets$cwes$CWE_Type == "View", ]
 
   # Experimental relationship weight
-
-  rw <- c("ChildOf" = 3,
-          "ParentOf" = 3,
-          "StartsWith" = 5,
-          "CanFollow" = 4,
-          "CanPrecede" = 4,
-          "RequiredBy" = 7,
-          "Requires" = 7,
-          "CanAlsoBe" = 5,
-          "PeerOf" = 1,
-          "has_member" = 5,
-          "member_of" = 5)
+  relations <- data.frame(from = c("ChildOf", "ParentOf", "StartsWith", "CanFollow", "CanPrecede", "RequiredBy",
+                                   "Requires", "CanAlsoBe", "PeerOf", "has_member", "member_of"),
+                          to = c("ParentOf", "ChildOf", NA, "CanPrecede", "CanFollow", NA, NA,
+                                 "CanAlsoBe", "PeerOf", "member_of", "has_member"),
+                          weight = c(3, 3, 5, 4, 4, 7, 7, 5, 1, 5, 5),
+                          stringsAsFactors = F)
 
   # Views hierarchy
   vh <- cwes.views[, c("ID", "Related_Weakness")]
@@ -283,18 +284,11 @@ GetCWEHierarcy <- function(as_numbers = T) {
                    y$view_id <- as.character(y$view_id)
                    data.table::rbindlist(apply(y, 1,
                                                function(z){
-                                                 if (z["nature"] == "has_member") {
-                                                   src <- z["cwe_id"]
-                                                   target <- x[1]
-                                                 } else {
-                                                   src <- x[1]
-                                                   target <- z["cwe_id"]
-                                                 }
-                                                 nature <- z["nature"]
-                                                 data.frame(src = src,
-                                                            target = target,
-                                                            nature = nature,
-                                                            weight = rw[nature],
+                                                 weight <- as.character(dplyr::select(dplyr::filter(relations, from == z[["nature"]]), weight))
+                                                 data.frame(src = c(x[1], z[["cwe_id"]]),
+                                                            target = c(z[["cwe_id"]], x[1]),
+                                                            nature = c(z[["nature"]], as.character(dplyr::select(dplyr::filter(relations, from == z[["nature"]]), to))),
+                                                            weight = c(weight, weight),
                                                             stringsAsFactors = F)
                                                }
                    ))
@@ -305,6 +299,7 @@ GetCWEHierarcy <- function(as_numbers = T) {
                }
   )
   vh <- unique(data.table::rbindlist(vh))
+  vh <- vh[complete.cases(vh),]
   vh$type <- rep("view", nrow(vh))
 
   # Categories hierarchy
@@ -320,18 +315,11 @@ GetCWEHierarcy <- function(as_numbers = T) {
                    y$view_id <- as.character(y$view_id)
                    data.table::rbindlist(apply(y, 1,
                                                function(z){
-                                                 if (z["nature"] == "has_member") {
-                                                   src <- z["cwe_id"]
-                                                   target <- x[1]
-                                                 } else {
-                                                   src <- x[1]
-                                                   target <- z["cwe_id"]
-                                                 }
-                                                 nature <- z["nature"]
-                                                 data.frame(src = src,
-                                                            target = target,
-                                                            nature = nature,
-                                                            weight = rw[nature],
+                                                 weight <- as.character(dplyr::select(dplyr::filter(relations, from == z[["nature"]]), weight))
+                                                 data.frame(src = c(x[1], z[["cwe_id"]]),
+                                                            target = c(z[["cwe_id"]], x[1]),
+                                                            nature = c(z[["nature"]], as.character(dplyr::select(dplyr::filter(relations, from == z[["nature"]]), to))),
+                                                            weight = c(weight, weight),
                                                             stringsAsFactors = F)
                                                }
                    ))
@@ -342,6 +330,7 @@ GetCWEHierarcy <- function(as_numbers = T) {
                }
   )
   ch <- unique(data.table::rbindlist(ch))
+  ch <- ch[complete.cases(ch),]
   ch$type <- rep("category", nrow(ch))
 
   # Weakness hierarchy
@@ -352,13 +341,11 @@ GetCWEHierarcy <- function(as_numbers = T) {
                 y <- RJSONIO::fromJSON(x[2])
                 data.table::rbindlist(lapply(y,
                                              function(z) {
-                                               # XXXXXXXXXXXXXXXX
-                                               # ?Set directions based on nature?
-                                               # XXXXXXXXXXXXXXXX
-                                               data.frame(src = x[1],
-                                                          target = z[["cwe_id"]],
-                                                          nature = z[["nature"]],
-                                                          weight = rw[(z[["nature"]])],
+                                               weight <- as.character(dplyr::select(dplyr::filter(relations, from == z[["nature"]]), weight))
+                                               data.frame(src = c(x[1], z[["cwe_id"]]),
+                                                          target = c(z[["cwe_id"]], x[1]),
+                                                          nature = c(z[["nature"]], as.character(dplyr::select(dplyr::filter(relations, from == z[["nature"]]), to))),
+                                                          weight = c(weight, weight),
                                                           stringsAsFactors = F)
                                              }
                 ))
@@ -366,9 +353,11 @@ GetCWEHierarcy <- function(as_numbers = T) {
               }
   )
   wh <- unique(data.table::rbindlist(wh))
+  wh <- wh[complete.cases(wh),]
   wh$type <- rep("weakness", nrow(wh))
 
   cwes2cwes <- dplyr::bind_rows(vh, ch, wh)
+  cwes2cwes <- dplyr::arrange(cwes2cwes, src)
   if (as_numbers) {
     cwes2cwes$src <- as.numeric(cwes2cwes$src)
     cwes2cwes$target <- as.numeric(cwes2cwes$target)
